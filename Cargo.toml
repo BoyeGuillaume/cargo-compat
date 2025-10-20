@@ -1,0 +1,22 @@
+[package]
+description = "A tool to automatically determine semver requirements for Rust projects based on their dependencies and testing"
+name = "rust-version-searcher"
+version = "0.1.0"
+authors = ["Guillaume Boyé <guillaume314boye@gmail.com>"]
+edition = "2024"
+
+[dependencies]
+cargo-util-schemas = "0.10.0"
+chrono = { version = "0.4.42", features = ["serde"] }
+clap = { version = "4.5.50", features = ["derive"] }
+crates_io_api = "0.12.0"
+fern = { version = "0.7.1", features = ["chrono"] }
+futures = "0.3.31"
+glob = "0.3.3"
+log = "0.4.28"
+semver = { version = "1.0.27", features = ["serde"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_cbor = "0.11.2"
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", features = ["full"] }
+toml = "0.9.8"
