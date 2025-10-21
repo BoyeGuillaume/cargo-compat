@@ -1,5 +1,11 @@
 [package]
 description = "Cargo subcommand to resolve and validate dependency versions (SemVer) for Rust projects and workspaces"
+license-file = "LICENSE"
+homepage = "https://github.com/BoyeGuillaume/cargo-compat"
+repository = "https://github.com/BoyeGuillaume/cargo-compat"
+readme = "README.md"
+keywords = ["cargo-plugin", "dependency-resolution"]
+categories = ["command-line-utilities", "development-tools::build-tools"]
 name = "cargo-compat"
 version = "0.1.0"
 authors = ["Guillaume Boyé <guillaume314boye@gmail.com>"]
