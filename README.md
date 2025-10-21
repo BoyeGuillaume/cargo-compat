@@ -1,4 +1,4 @@
-# cargo-compat
+# Cargo Compat
 
 A Cargo subcommand/CLI to determine compatible dependency versions (SemVer) by resolving your crates and optionally building/testing to validate.
 
