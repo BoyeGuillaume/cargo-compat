@@ -140,9 +140,7 @@ async fn main() {
     // If running as a cargo subcommand, skip the first argument
     let mut args_iter = std::env::args();
     if let Some(first_arg) = args_iter.next() {
-        if first_arg.ends_with("cargo-compat") && args_iter.next().as_deref() == Some("compat") {
-            // Running as `cargo compat`, skip the next argument
-        } else {
+        if !first_arg.ends_with("cargo-compat") {
             // Not running as a cargo subcommand, restore the iterator
             args_iter = std::env::args();
         }

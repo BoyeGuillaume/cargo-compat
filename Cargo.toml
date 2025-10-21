@@ -7,7 +7,7 @@ readme = "README.md"
 keywords = ["cargo-plugin", "version-resolution"]
 categories = ["command-line-utilities", "development-tools::cargo-plugins"]
 name = "cargo-compat"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Guillaume Boyé <guillaume314boye@gmail.com>"]
 edition = "2024"
 
