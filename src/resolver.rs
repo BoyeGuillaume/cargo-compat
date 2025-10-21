@@ -251,7 +251,7 @@ fn resolve_package(
         }
 
         comparison_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        // std::thread::sleep(std::time::Duration::from_millis(500)); // Throttle comparisons to avoid overwhelming the system
+        std::thread::sleep(std::time::Duration::from_millis(500)); // Throttle comparisons to avoid overwhelming the system
 
         validator.set_dependency(package_name.to_string(), version.clone());
         match validator.run_check(check) {

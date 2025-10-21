@@ -98,6 +98,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
+name = "cargo-compat"
+version = "0.1.0"
+dependencies = [
+ "cargo-util-schemas",
+ "chrono",
+ "clap",
+ "crates_io_api",
+ "either",
+ "fern",
+ "futures",
+ "glob",
+ "log",
+ "semver",
+ "serde",
+ "serde_cbor",
+ "thiserror",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "cargo-util-schemas"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1000,27 +1021,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "winreg",
-]
-
-[[package]]
-name = "rust-version-searcher"
-version = "0.1.0"
-dependencies = [
- "cargo-util-schemas",
- "chrono",
- "clap",
- "crates_io_api",
- "either",
- "fern",
- "futures",
- "glob",
- "log",
- "semver",
- "serde",
- "serde_cbor",
- "thiserror",
- "tokio",
- "toml",
 ]
 
 [[package]]

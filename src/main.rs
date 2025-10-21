@@ -136,6 +136,11 @@ async fn main() {
     let args = Arguments::parse();
     setup_logger(&args);
 
+    // Responsibility disclaimer (info-level unless suppressed)
+    log::info!(
+        "Please use cargo-compat responsibly: resolving can be expensive and may put load on crates.io and docs.rs. Prefer caching, avoid tight loops, and limit scope with --include."
+    );
+
     match &args.command {
         Command::Cache(cache_command) => {
             do_cache_command(cache_command, &args).await;
@@ -575,11 +580,11 @@ fn find_cache_path(cache_dir: &Option<String>) -> CachePaths {
                 .map(|home| {
                     std::path::PathBuf::from(home)
                         .join(".cache")
-                        .join("rust-version-searcher")
+                        .join("cargo-compat")
                 })
                 .unwrap_or_else(|_| {
                     warn!("HOME environment variable not set, using current directory for cache");
-                    std::path::PathBuf::from(".rust-version-searcher-cache")
+                    std::path::PathBuf::from(".cargo-compat-cache")
                 })
         });
     debug!("Using base cache directory: {}", base_cache_dir.display());
