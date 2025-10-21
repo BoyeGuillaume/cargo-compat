@@ -1,8 +1,12 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::atomic::AtomicUsize, usize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::atomic::AtomicUsize,
+};
 
 use either::Either;
 use log::{debug, info, warn};
-use semver::{Comparator, Version, VersionReq};
+use semver::{Comparator, Prerelease, Version, VersionReq};
 
 use crate::{
     cargo::CargoPackage,
@@ -179,25 +183,11 @@ impl Resolver {
 
         // Finally perform the resolution
         for (package_name, package_information) in self.package_informations.iter() {
-            let version_req = self.packages_requirements.get_mut(package_name).unwrap();
             let version = self.packages[package_name].clone();
-            info!(
-                "Resolving package '{}' with version requirement '{}'",
-                package_name, version_req
-            );
-
-            version_req.comparators = vec![Comparator {
-                op: semver::Op::Exact,
-                major: version.major,
-                minor: Some(version.minor),
-                patch: Some(version.patch),
-                pre: version.pre.clone(),
-            }];
 
             resolve_package(
                 package_name,
                 version.clone(),
-                version_req,
                 package_information,
                 self.validator.as_mut(),
                 check,
@@ -206,12 +196,24 @@ impl Resolver {
 
         Ok(&self.packages_requirements)
     }
+
+    pub fn clean(&mut self) {
+        self.validator.clean();
+    }
+
+    pub fn write_cargo_toml_with_resolved_versions(&mut self) -> Result<(), Error> {
+        for (package_name, version) in &self.packages_requirements {
+            self.validator
+                .set_dependency_req(package_name.clone(), version.clone());
+        }
+
+        Ok(())
+    }
 }
 
 fn resolve_package(
     package_name: &str,
     version: Version,
-    version_req: &mut VersionReq,
     package_information: &Crate,
     validator: &mut dyn RepoValidator,
     check: Check,
@@ -233,48 +235,54 @@ fn resolve_package(
         .collect();
 
     let comparison_count = AtomicUsize::new(0);
-    let mut validator_fn = |version: &Version| {
-        comparison_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    let mut old_check: BTreeMap<Version, bool> = BTreeMap::new();
 
+    let mut validator_fn = |version: &Version| {
+        if old_check.contains_key(version) {
+            return Ok(*old_check.get(version).unwrap());
+        }
+
+        comparison_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         std::thread::sleep(std::time::Duration::from_millis(500)); // Throttle comparisons to avoid overwhelming the system
 
         validator.set_dependency(package_name.to_string(), version.clone());
         match validator.run_check(check) {
-            Err(Either::Left(_)) => Ok(false),
+            Err(Either::Left(_)) => {
+                old_check.insert(version.clone(), false);
+                info!(
+                    "Checking package '{}' with version '{}'...FAIL",
+                    package_name, version
+                );
+                Ok(false)
+            }
             Err(Either::Right(e)) => Err(e),
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                old_check.insert(version.clone(), true);
+                info!(
+                    "Checking package '{}' with version '{}'...OK",
+                    package_name, version
+                );
+                Ok(true)
+            }
         }
     };
 
-    let req1 = binary_search_bounds(
-        &version,
-        &VersionReq::STAR,
-        all_versions.clone(),
-        |a, b| a.major == b.major,
-        &mut validator_fn,
-    )?;
-
-    let req2 = binary_search_bounds(
-        &version,
-        &req1,
-        all_versions.clone(),
-        |a, b| a.major == b.major && a.minor == b.minor,
-        &mut validator_fn,
-    )?;
-
-    let output_req = binary_search_bounds(
-        &version,
-        &req2,
-        all_versions,
-        |a, b| a.major == b.major && a.minor == b.minor && a.patch == b.patch,
-        &mut validator_fn,
-    )?;
+    let output_req = binary_search_bounds(&version, all_versions, &mut validator_fn)?;
 
     // Determine number of comparisons
     let total_comparisons = comparison_count.load(std::sync::atomic::Ordering::Acquire);
     info!(
-        "Resolved package '{}' to version requirement '{}' using {} comparisons",
-        package_name, output_req, total_comparisons
+        "Resolved package '{}' to version requirement '{}' using {} comparisons. Possible versions: {}",
+        package_name,
+        output_req,
+        total_comparisons,
+        package_information
+            .versions
+            .iter()
+            .filter(|v| !v.yanked)
+            .map(|v| v.version.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     // Set dependency back to default
@@ -285,17 +293,11 @@ fn resolve_package(
 
 fn binary_search_bounds(
     initial_version: &Version,
-    req: &VersionReq,
     mut versions: Vec<Version>,
-    dedup: impl Fn(&Version, &Version) -> bool,
     validator: &mut impl FnMut(&Version) -> Result<bool, Error>,
 ) -> Result<VersionReq, Error> {
     // First filter out versions that do not match the requirement and remove duplicates
-    versions.retain(|x| req.matches(x));
     versions.sort();
-    versions.reverse();
-    versions.dedup_by(|a, b| (*a != *initial_version && *b != *initial_version) && dedup(a, b));
-    versions.reverse();
 
     // Find the index of the initial version
     let mut left_invalid = None;
@@ -307,14 +309,13 @@ fn binary_search_bounds(
     let mut right_invalid = None;
 
     // Binary search on the left side
-    while left_valid > left_invalid.unwrap_or(usize::MIN) + 1 {
+    loop {
         match left_invalid {
             Some(invalid_index) => {
                 let mid_index = (invalid_index + left_valid) / 2;
-                info!(
-                    "mid_index: {}, invalid_index: {}, left_valid: {}",
-                    mid_index, invalid_index, left_valid
-                );
+                if mid_index == left_valid || mid_index == invalid_index {
+                    break;
+                }
 
                 let is_valid = validator(&versions[mid_index])?;
                 if is_valid {
@@ -335,10 +336,14 @@ fn binary_search_bounds(
     }
 
     // Binary search on the right side
-    while right_valid + 1 < right_invalid.unwrap_or(usize::MAX) {
+    loop {
         match right_invalid {
             Some(invalid_index) => {
-                let mid_index = (invalid_index + right_valid + 1) / 2;
+                let mid_index = (invalid_index + right_valid) / 2;
+                if mid_index == right_valid || mid_index == invalid_index {
+                    break;
+                }
+
                 let is_valid = validator(&versions[mid_index])?;
                 if is_valid {
                     right_valid = mid_index;
@@ -358,25 +363,100 @@ fn binary_search_bounds(
     }
 
     // Construct the resulting VersionReq
-    let min_version = versions[left_valid].clone();
-    let max_version = versions[right_valid].clone();
+    let mut bounds = vec![];
 
-    Ok(VersionReq {
-        comparators: vec![
-            Comparator {
-                op: semver::Op::GreaterEq,
-                major: min_version.major,
-                minor: Some(min_version.minor),
-                patch: Some(min_version.patch),
-                pre: min_version.pre.clone(),
-            },
-            Comparator {
-                op: semver::Op::LessEq,
-                major: max_version.major,
-                minor: Some(max_version.minor),
-                patch: Some(max_version.patch),
-                pre: max_version.pre.clone(),
-            },
-        ],
-    })
+    if left_invalid.is_some() {
+        let min_version = versions[left_valid].clone();
+
+        bounds.push(Comparator {
+            op: semver::Op::GreaterEq,
+            major: min_version.major,
+            minor: Some(min_version.minor),
+            patch: Some(min_version.patch),
+            pre: min_version.pre.clone(),
+        });
+    }
+
+    if right_invalid.is_some() {
+        let max_version = versions[right_valid].clone();
+
+        bounds.push(Comparator {
+            op: semver::Op::LessEq,
+            major: max_version.major,
+            minor: Some(max_version.minor),
+            patch: Some(max_version.patch),
+            pre: max_version.pre.clone(),
+        });
+    }
+    let version_req = VersionReq {
+        comparators: bounds,
+    };
+
+    // Simplify the version requirement if possible
+    Ok(simplify_version_req(version_req, &versions))
+}
+
+fn simplify_version_req(version_req: VersionReq, versions: &[Version]) -> VersionReq {
+    // If the version_req matches all versions, return "*"
+    if version_req.comparators.is_empty() || versions.iter().all(|v| version_req.matches(v)) {
+        return VersionReq::STAR;
+    }
+
+    // If the version_req matches only one version, return "=x.y.z"
+    let matching_versions: BTreeSet<Version> = versions
+        .iter()
+        .filter(|v| version_req.matches(v))
+        .cloned()
+        .collect();
+    if matching_versions.len() == 1 {
+        let v = matching_versions.iter().next().unwrap();
+        return VersionReq {
+            comparators: vec![Comparator {
+                op: semver::Op::Exact,
+                major: v.major,
+                minor: Some(v.minor),
+                patch: Some(v.patch),
+                pre: v.pre.clone(),
+            }],
+        };
+    }
+
+    // Try simplify to caret requirements (attempt)
+    let mut proposal_caret = VersionReq {
+        comparators: vec![Comparator {
+            op: semver::Op::Caret,
+            major: version_req.comparators[0].major,
+            minor: None,
+            patch: None,
+            pre: Prerelease::EMPTY,
+        }],
+    };
+
+    let check_proposal = |proposal: &VersionReq| {
+        let hashset = versions
+            .iter()
+            .filter(|v| proposal.matches(v))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        return hashset == matching_versions;
+    };
+
+    if check_proposal(&proposal_caret) {
+        return proposal_caret;
+    }
+
+    // Make caret more specific if possible
+    proposal_caret.comparators[0].minor = Some(version_req.comparators[0].minor.unwrap_or(0));
+    if check_proposal(&proposal_caret) {
+        return proposal_caret;
+    }
+
+    // Make caret even more specific if possible
+    proposal_caret.comparators[0].patch = Some(version_req.comparators[0].patch.unwrap_or(0));
+    if check_proposal(&proposal_caret) {
+        return proposal_caret;
+    }
+
+    // If no simplification was possible, return the original version_req
+    version_req
 }

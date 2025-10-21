@@ -284,6 +284,19 @@ async fn do_resolve_command(
         }
         Ok(v) => v,
     };
+
+    // Print the resolved versions
+    println!("Resolved package versions:");
+    for (package_name, version) in versions {
+        println!("- {}: {}", package_name, version);
+    }
+
+    // Overwrite cargo.toml with resolved versions if needed
+    if let Err(e) = resolver.write_cargo_toml_with_resolved_versions() {
+        log::error!("Failed to write resolved versions to Cargo.toml: {}", e);
+        std::process::exit(1);
+    }
+    resolver.clean();
 }
 
 async fn resolve_packages(

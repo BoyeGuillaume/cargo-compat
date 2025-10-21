@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use either::Either;
-use log::info;
-use semver::Version;
+use log::{debug, warn};
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -77,6 +77,10 @@ pub struct ValidationError {
 
 /// Trait for validating repositories
 pub trait RepoValidator {
+    fn clean(&mut self) {}
+
+    fn set_dependency_req(&mut self, name: String, version_req: VersionReq);
+
     fn set_dependency(&mut self, name: String, version: Version);
 
     fn set_dependencies(&mut self, dependencies: BTreeMap<String, Version>) {
@@ -106,7 +110,7 @@ impl CargoRepoValidator {
             .output()
             .map_err(|e| crate::error::Error::AnyIoError(e))?;
 
-        info!(
+        debug!(
             "Running cargo command: {} {}...{}",
             self.cargo_command,
             args.iter()
@@ -131,6 +135,19 @@ impl CargoRepoValidator {
 }
 
 impl RepoValidator for CargoRepoValidator {
+    fn clean(&mut self) {
+        let _ = self
+            .run_cargo_command(&["clean".to_string()])
+            .inspect_err(|e| {
+                warn!("Failed to clean the cargo project: {}", e);
+            });
+    }
+
+    fn set_dependency_req(&mut self, name: String, version_req: VersionReq) {
+        self.run_cargo_command(&["add".to_string(), format!("{}@{}", name, version_req)])
+            .unwrap();
+    }
+
     fn set_dependency(&mut self, name: String, version: Version) {
         self.run_cargo_command(&["add".to_string(), format!("{}@={}", name, version)])
             .unwrap();
