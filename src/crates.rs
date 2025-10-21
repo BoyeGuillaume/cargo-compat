@@ -1,3 +1,4 @@
+//! Types and helpers for interacting with crates.io and representing crates and their versions.
 use cargo_util_schemas::manifest::{PackageName, TomlDependency};
 use chrono::{DateTime, Utc};
 use log::{debug, error, info};
@@ -213,7 +214,7 @@ impl TryFrom<crates_io_api::FullCrate> for Crate {
 pub async fn download_crates(crate_names: &[&str]) -> Result<Vec<Crate>, crate::error::Error> {
     // Create the async-client
     let async_client = crates_io_api::AsyncClient::new(
-        "version-seacher (help@my_bot.com)",
+        "rust-version-searcher (github.com/BoyeGuillaume/rust-version-searcher)",
         std::time::Duration::from_millis(500),
     )
     .unwrap();
@@ -223,7 +224,7 @@ pub async fn download_crates(crate_names: &[&str]) -> Result<Vec<Crate>, crate::
     // For each crate name, download the crate data
     debug!("Downloading crate data for: [{}]", crate_names.join(", "));
     let crates = crate_names
-        .into_iter()
+        .iter()
         .map(async |name| {
             let elem = async_client.get_crate(name).await;
             info!(
@@ -249,7 +250,7 @@ pub async fn download_crates(crate_names: &[&str]) -> Result<Vec<Crate>, crate::
 pub async fn download_full_crates(crate_names: &[&str]) -> Result<Vec<Crate>, crate::error::Error> {
     // Create the async-client
     let async_client = crates_io_api::AsyncClient::new(
-        "version-seacher (help@my_bot.com)",
+        "rust-version-searcher (github.com/BoyeGuillaume/rust-version-searcher)",
         std::time::Duration::from_millis(500),
     )
     .unwrap();
@@ -262,7 +263,7 @@ pub async fn download_full_crates(crate_names: &[&str]) -> Result<Vec<Crate>, cr
         crate_names.join(", ")
     );
     let crates = crate_names
-        .into_iter()
+        .iter()
         .map(async |name| {
             let elem = async_client.full_crate(name, true).await;
             info!(

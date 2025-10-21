@@ -1,3 +1,4 @@
+//! Persistent cache for crates.io responses to minimize network calls and speed up operations.
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Duration, Utc};
@@ -10,13 +11,13 @@ fn impl_save_to_path(path: &Path, data: &impl Serialize) -> Result<(), crate::er
     debug!("Saving cache to: {}", path.to_string_lossy());
 
     // If path does not exist, create parent directories
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::FileSystemError {
-                path: parent.to_string_lossy().to_string(),
-                error: e.kind(),
-            })?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| crate::error::Error::FileSystemError {
+            path: parent.to_string_lossy().to_string(),
+            error: e.kind(),
+        })?;
     };
 
     let writer = std::fs::File::create(path).map_err(|e| crate::error::Error::FileSystemError {
@@ -73,12 +74,14 @@ fn impl_load_from_path<T: for<'de> Deserialize<'de> + Default>(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// A single cache entry for a crate, capturing the metadata and when it was fetched.
 pub struct CrateCacheEntry {
     pub krate: Crate,
     pub last_fetched_at: DateTime<Utc>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
+/// In-memory representation of the cache file with convenience methods to read/write and query it.
 pub struct CrateCache {
     pub entries: BTreeMap<String, CrateCacheEntry>,
 }
@@ -123,7 +126,7 @@ impl CrateCache {
         found_crates
     }
 
-    pub async fn retrives_packages_fetch(
+    pub async fn retrieve_packages_fetch(
         &mut self,
         crate_names: &[&str],
         cache_validity: Duration,

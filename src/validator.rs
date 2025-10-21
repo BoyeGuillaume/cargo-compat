@@ -1,3 +1,4 @@
+//! Validation layer that runs cargo build/test to verify candidate dependency sets.
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
@@ -6,6 +7,7 @@ use log::{debug, warn};
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
+/// Options controlling how cargo build is run.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BuildOptions {
     pub packages: Option<Vec<String>>,
@@ -34,6 +36,7 @@ impl BuildOptions {
     }
 }
 
+/// Options controlling how cargo test is run.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TestOptions {
     pub filters: Vec<String>,
@@ -51,6 +54,7 @@ impl TestOptions {
     }
 }
 
+/// A check to run against the repository: either a build or a test run.
 #[derive(Clone, Copy)]
 pub enum Check<'a> {
     Build {
@@ -62,15 +66,17 @@ pub enum Check<'a> {
     },
 }
 
+/// A non-successful validation outcome with details to aid troubleshooting.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildFailure {
     pub cargo_error_code: i32,
     pub message: String,
 }
 
+/// Captures build/test failure and timestamp for diagnostics.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidationError {
-    pub test_failured: bool,
+    pub tests_failed: bool,
     pub build_failure: Option<BuildFailure>,
     pub runned_at: DateTime<Utc>,
 }
@@ -108,7 +114,7 @@ impl CargoRepoValidator {
         let elem = std::process::Command::new(self.cargo_command.as_str())
             .args(args)
             .output()
-            .map_err(|e| crate::error::Error::AnyIoError(e))?;
+            .map_err(crate::error::Error::AnyIoError)?;
 
         debug!(
             "Running cargo command: {} {}...{}",
@@ -174,7 +180,7 @@ impl RepoValidator for CargoRepoValidator {
                     };
 
                     let validation_error = ValidationError {
-                        test_failured: false,
+                        tests_failed: false,
                         build_failure: Some(build_failure),
                         runned_at: Utc::now(),
                     };
@@ -197,7 +203,7 @@ impl RepoValidator for CargoRepoValidator {
 
                 if status != 0 {
                     let validation_error = ValidationError {
-                        test_failured: true,
+                        tests_failed: true,
                         build_failure: None,
                         runned_at: Utc::now(),
                     };

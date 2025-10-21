@@ -1,3 +1,4 @@
+//! Core algorithm for selecting the most permissive semver requirements that still validate.
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
@@ -15,6 +16,7 @@ use crate::{
     validator::{BuildOptions, Check, RepoValidator, TestOptions},
 };
 
+/// Resolves dependency version requirements by testing candidate versions against the repository.
 pub struct Resolver {
     pub targets: Vec<CargoPackage>,
     pub path: PathBuf,
@@ -28,6 +30,7 @@ pub struct Resolver {
 }
 
 impl Resolver {
+    /// Create a new resolver for a set of targets and available crate metadata.
     pub fn new(
         targets: Vec<CargoPackage>,
         path: PathBuf,
@@ -48,6 +51,7 @@ impl Resolver {
         }
     }
 
+    /// Pre-populate selections using Cargo.lock when possible, otherwise pick latest matching versions.
     pub fn populate_default(&mut self) -> Result<(), Error> {
         // First read the Cargo.lock file
         let cargo_lock_path = self.path.join("Cargo.lock");
@@ -96,26 +100,25 @@ impl Resolver {
 
         // Finally display all unresolved packages, pick the latest version available
         for (pkg_name, version_req) in &self.packages_requirements {
-            if !self.packages.contains_key(pkg_name) {
-                if let Some(krate) = self.package_informations.get(pkg_name) {
-                    if let Some(latest_version) = krate
-                        .versions
-                        .iter()
-                        .filter(|v| version_req.matches(&v.version))
-                        .max_by_key(|a| a.version.clone())
-                    {
-                        debug!(
-                            "Package '{}' not found in Cargo.lock. Selected latest version '{}' from crates.io",
-                            pkg_name, latest_version.version
-                        );
-                    }
-                }
+            if !self.packages.contains_key(pkg_name)
+                && let Some(krate) = self.package_informations.get(pkg_name)
+                && let Some(latest_version) = krate
+                    .versions
+                    .iter()
+                    .filter(|v| version_req.matches(&v.version))
+                    .max_by_key(|a| a.version.clone())
+            {
+                debug!(
+                    "Package '{}' not found in Cargo.lock. Selected latest version '{}' from crates.io",
+                    pkg_name, latest_version.version
+                );
             }
         }
 
         Ok(())
     }
 
+    /// Run the resolution process and return the final semver requirements by crate name.
     pub fn resolve(&mut self) -> Result<&BTreeMap<String, VersionReq>, Error> {
         // First of all search for a configuration that works
         // We assume the default configuration is the one that works
@@ -140,7 +143,7 @@ impl Resolver {
                         req.matches(&v.version)
                     })
                     .max_by_key(|v| v.version.clone())
-                    .or_else(|| crate_info.versions.iter().filter(|v| !v.yanked).last())
+                    .or_else(|| crate_info.versions.iter().filter(|v| !v.yanked).next_back())
                     .ok_or_else(|| {
                         crate::error::Error::Other(
                             format!("No available versions for package '{}'", package_name).into(),
@@ -185,22 +188,27 @@ impl Resolver {
         for (package_name, package_information) in self.package_informations.iter() {
             let version = self.packages[package_name].clone();
 
-            resolve_package(
+            let version_req = resolve_package(
                 package_name,
                 version.clone(),
                 package_information,
                 self.validator.as_mut(),
                 check,
             )?;
+
+            self.packages_requirements
+                .insert(package_name.clone(), version_req);
         }
 
         Ok(&self.packages_requirements)
     }
 
+    /// Clean any temporary files or processes created by the validator.
     pub fn clean(&mut self) {
         self.validator.clean();
     }
 
+    /// Persist resolution output back to the repository (e.g., via cargo-edit add commands).
     pub fn write_cargo_toml_with_resolved_versions(&mut self) -> Result<(), Error> {
         for (package_name, version) in &self.packages_requirements {
             self.validator
@@ -217,7 +225,7 @@ fn resolve_package(
     package_information: &Crate,
     validator: &mut dyn RepoValidator,
     check: Check,
-) -> Result<(), Error> {
+) -> Result<VersionReq, Error> {
     // Acording to semver semantics, patch versions can be updated freely when using caret requirements
     // We need to minimize the number of comparisons as they are very expensive
     // A package with 300 versions will need 2log2(300) ~= 18 comparisons in the worst case to find the correct version bounds
@@ -243,7 +251,7 @@ fn resolve_package(
         }
 
         comparison_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        std::thread::sleep(std::time::Duration::from_millis(500)); // Throttle comparisons to avoid overwhelming the system
+        // std::thread::sleep(std::time::Duration::from_millis(500)); // Throttle comparisons to avoid overwhelming the system
 
         validator.set_dependency(package_name.to_string(), version.clone());
         match validator.run_check(check) {
@@ -272,23 +280,20 @@ fn resolve_package(
     // Determine number of comparisons
     let total_comparisons = comparison_count.load(std::sync::atomic::Ordering::Acquire);
     info!(
-        "Resolved package '{}' to version requirement '{}' using {} comparisons. Possible versions: {}",
+        "Resolved package '{}' to version requirement '{}' using {} comparisons ({} matching versions)",
         package_name,
         output_req,
         total_comparisons,
         package_information
             .versions
             .iter()
-            .filter(|v| !v.yanked)
-            .map(|v| v.version.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
+            .filter(|v| !v.yanked && output_req.matches(&v.version))
+            .count()
     );
 
     // Set dependency back to default
     validator.set_dependency(package_name.to_string(), version);
-
-    Ok(())
+    Ok(output_req)
 }
 
 fn binary_search_bounds(
@@ -438,7 +443,7 @@ fn simplify_version_req(version_req: VersionReq, versions: &[Version]) -> Versio
             .filter(|v| proposal.matches(v))
             .cloned()
             .collect::<BTreeSet<_>>();
-        return hashset == matching_versions;
+        hashset == matching_versions
     };
 
     if check_proposal(&proposal_caret) {

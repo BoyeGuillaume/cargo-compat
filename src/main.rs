@@ -22,7 +22,7 @@ pub mod resolver;
 pub mod validator;
 
 #[derive(Parser)]
-#[command(author, version, author, about, long_about = None)]
+#[command(author, version, about, long_about = None)]
 pub struct Arguments {
     #[command(subcommand)]
     pub command: Command,
@@ -146,7 +146,7 @@ async fn main() {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap());
 
-            let targets = read_cargo_from_path_with_includes(&path, &include);
+            let targets = read_cargo_from_path_with_includes(&path, include);
 
             for package in targets {
                 println!("Package: {} (version: {})", package.name, package.version);
@@ -212,7 +212,7 @@ async fn main() {
 async fn do_resolve_command(
     args: &Arguments,
     path: &Option<String>,
-    include: &Vec<String>,
+    include: &[String],
     cargo_path: String,
     release: bool,
     no_test: bool,
@@ -269,12 +269,9 @@ async fn do_resolve_command(
         },
     );
 
-    match resolver.populate_default() {
-        Err(e) => {
-            log::error!("Failed to populate resolver: {}", e);
-            std::process::exit(1);
-        }
-        _ => {}
+    if let Err(e) = resolver.populate_default() {
+        log::error!("Failed to populate resolver: {}", e);
+        std::process::exit(1);
     };
 
     let versions = match resolver.resolve() {
@@ -312,7 +309,7 @@ async fn resolve_packages(
 
     // Retrieve packages, fetching missing ones
     let packages_map = cache
-        .retrives_packages_fetch(
+        .retrieve_packages_fetch(
             &all_dependencies
                 .iter()
                 .map(|s| s.as_str())
@@ -463,7 +460,7 @@ async fn do_cache_command(command: &CacheCommand, args: &Arguments) {
             };
 
             let information = cache
-                .retrives_packages_fetch(&[crate_name.as_ref()], age_limit)
+                .retrieve_packages_fetch(&[crate_name.as_ref()], age_limit)
                 .await
                 .unwrap_or_else(|e| {
                     log::error!("Failed to fetch crate {}: {}", crate_name, e);
@@ -505,6 +502,7 @@ async fn do_cache_command(command: &CacheCommand, args: &Arguments) {
     }
 }
 
+/// Configure log output to stdout/stderr with colors, timestamps, and optional file:line info.
 fn setup_logger(args: &Arguments) {
     let level = if args.silent {
         log::LevelFilter::Off
@@ -516,17 +514,49 @@ fn setup_logger(args: &Arguments) {
         log::LevelFilter::Info
     };
 
-    fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{}][{}] {}",
-                record.level(),
-                record.target(),
-                message
-            ))
+    let colors = fern::colors::ColoredLevelConfig::new()
+        .error(fern::colors::Color::Red)
+        .warn(fern::colors::Color::Yellow)
+        .info(fern::colors::Color::Green)
+        .debug(fern::colors::Color::Blue)
+        .trace(fern::colors::Color::Magenta);
+
+    let with_location = matches!(level, log::LevelFilter::Debug | log::LevelFilter::Trace);
+
+    let base = fern::Dispatch::new()
+        .format(move |out, message, record| {
+            let ts = chrono::Local::now().format("%d/%m/%Y %H:%M:%S");
+            let lvl = colors.color(record.level());
+
+            let loc = if with_location {
+                match (record.file(), record.line()) {
+                    (Some(file), Some(line)) => {
+                        let short = file.rsplit('/').next().unwrap_or(file);
+                        format!("[{}:{}] ", short, line)
+                    }
+                    _ => String::new(),
+                }
+            } else {
+                String::new()
+            };
+
+            out.finish(format_args!("[{}] {}{} -- {}", ts, loc, lvl, message))
         })
-        .level(level)
-        .chain(std::io::stdout())
+        .level(level);
+
+    base
+        // stdout: everything below Error
+        .chain(
+            fern::Dispatch::new()
+                .filter(|meta| meta.level() < log::Level::Error)
+                .chain(std::io::stdout()),
+        )
+        // stderr: Error and above
+        .chain(
+            fern::Dispatch::new()
+                .filter(|meta| meta.level() >= log::Level::Error)
+                .chain(std::io::stderr()),
+        )
         .apply()
         .unwrap();
 }
@@ -561,7 +591,7 @@ fn find_cache_path(cache_dir: &Option<String>) -> CachePaths {
 }
 
 fn read_cargo_from_path(path: &Path) -> Cargo {
-    match Cargo::from_path(&path) {
+    match Cargo::from_path(path) {
         Ok(cargo) => cargo,
         Err(e) => {
             log::error!("Error reading Cargo manifest: {}", e);
@@ -600,7 +630,7 @@ fn read_cargo_from_path_with_includes(path: &Path, includes: &[String]) -> Vec<C
                 .filter(|pkg| {
                     include_patterns
                         .iter()
-                        .any(|pat| pat.matches(&pkg.name.as_ref()))
+                        .any(|pat| pat.matches(pkg.name.as_ref()))
                 })
                 .cloned()
                 .collect::<Vec<_>>();

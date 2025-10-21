@@ -1,3 +1,4 @@
+//! Helpers for reading Cargo.toml manifests and Cargo.lock files, and modeling packages.
 use std::path::{Path, PathBuf};
 
 use cargo_util_schemas::manifest::{InheritableField, TomlManifest, TomlWorkspace};
@@ -32,6 +33,7 @@ pub fn read_cargo_manifest(path: &Path) -> Result<TomlManifest, crate::error::Er
     })
 }
 
+/// A normalized view of a Cargo package with resolved dependencies.
 #[derive(Debug, Clone)]
 pub struct CargoPackage {
     pub manifest_path: PathBuf,
@@ -44,7 +46,7 @@ pub struct CargoPackage {
 
 impl CargoPackage {
     pub fn from_target(
-        manifest_path: &PathBuf,
+        manifest_path: &Path,
         manifest: TomlManifest,
         workspace: Option<&TomlWorkspace>,
     ) -> Result<Option<Self>, crate::error::Error> {
@@ -95,7 +97,7 @@ impl CargoPackage {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Some(Self {
-            manifest_path: manifest_path.clone(),
+            manifest_path: manifest_path.to_path_buf(),
             version,
             name: package_name,
             dependencies,
@@ -105,6 +107,7 @@ impl CargoPackage {
     }
 }
 
+/// Either a single package or a collection of packages from a workspace.
 #[derive(Debug, Clone)]
 pub enum Cargo {
     Single(CargoPackage),
@@ -198,7 +201,7 @@ impl Cargo {
 
                 // Parse the member package
                 let package =
-                    CargoPackage::from_target(&entry_path, member_manifest, Some(&workspace))?;
+                    CargoPackage::from_target(&entry_path, member_manifest, Some(workspace))?;
                 if package.is_none() {
                     warn!(
                         "No package found in workspace member manifest at: {}",
@@ -216,12 +219,14 @@ impl Cargo {
     }
 }
 
+/// Package entries parsed from Cargo.lock
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CargoLockPackages {
     pub name: String,
     pub version: Version,
 }
 
+/// Minimal representation of a Cargo.lock file containing the packages array.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CargoLockFile {
     pub packages: Vec<CargoLockPackages>,
@@ -255,9 +260,7 @@ impl CargoLockFile {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::error::Error::CargoLockParseError {
                     path: path.to_string_lossy().to_string(),
-                    error: toml::de::Error::custom(format!(
-                        "Missing 'name' field in package entry"
-                    )),
+                    error: toml::de::Error::custom("Missing 'name' field in package entry"),
                 })?;
 
             let version_str = package
@@ -265,9 +268,7 @@ impl CargoLockFile {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| crate::error::Error::CargoLockParseError {
                     path: path.to_string_lossy().to_string(),
-                    error: toml::de::Error::custom(format!(
-                        "Missing 'version' field in package entry"
-                    )),
+                    error: toml::de::Error::custom("Missing 'version' field in package entry"),
                 })?;
             let version = Version::parse(version_str).map_err(|e| {
                 crate::error::Error::CargoLockParseError {
@@ -279,11 +280,7 @@ impl CargoLockFile {
                 }
             })?;
 
-            debug!(
-                "Parsed package from Cargo.lock: {} {}",
-                name,
-                version.to_string()
-            );
+            debug!("Parsed package from Cargo.lock: {} {}", name, version);
             let cargo_lock_package = CargoLockPackages {
                 name: name.to_string(),
                 version,

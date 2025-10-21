@@ -11,7 +11,7 @@ chrono = { version = "0.4.42", features = ["serde"] }
 clap = { version = "4.5.50", features = ["derive"] }
 crates_io_api = "0.12.0"
 either = "1.15.0"
-fern = { version = "0.7.1", features = ["chrono"] }
+fern = { version = "0.7.1", features = ["chrono", "colored"] }
 futures = "0.3.31"
 glob = "0.3.3"
 log = "0.4.28"
