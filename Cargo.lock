@@ -101,6 +101,7 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 name = "cargo-compat"
 version = "0.1.0"
 dependencies = [
+ "cargo-subcommand-metadata",
  "cargo-util-schemas",
  "chrono",
  "clap",
@@ -117,6 +118,12 @@ dependencies = [
  "tokio",
  "toml",
 ]
+
+[[package]]
+name = "cargo-subcommand-metadata"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a33d3b80a8db16c4ad7676653766a8e59b5f95443c8823cb7cff587b90cb91ba"
 
 [[package]]
 name = "cargo-util-schemas"

@@ -21,6 +21,10 @@ pub mod error;
 pub mod resolver;
 pub mod validator;
 
+cargo_subcommand_metadata::description!(
+    "A tool to automatically determine compatible versions of Rust crates for Cargo packages and workspaces."
+);
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Arguments {
@@ -133,7 +137,18 @@ pub enum Command {
 
 #[tokio::main]
 async fn main() {
-    let args = Arguments::parse();
+    // If running as a cargo subcommand, skip the first argument
+    let mut args_iter = std::env::args();
+    if let Some(first_arg) = args_iter.next() {
+        if first_arg.ends_with("cargo-compat") && args_iter.next().as_deref() == Some("compat") {
+            // Running as `cargo compat`, skip the next argument
+        } else {
+            // Not running as a cargo subcommand, restore the iterator
+            args_iter = std::env::args();
+        }
+    }
+
+    let args = Arguments::parse_from(args_iter);
     setup_logger(&args);
 
     // Responsibility disclaimer (info-level unless suppressed)
