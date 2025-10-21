@@ -10,6 +10,9 @@ pub enum Error {
     #[error("An error occurred while communicating with the crates.io API: {0}")]
     CratesIoApiError(#[from] crates_io_api::Error),
 
+    #[error("An I/O error occurred: {0}")]
+    AnyIoError(#[from] std::io::Error),
+
     #[error("File system error: {path}: {error}")]
     FileSystemError {
         path: String,
@@ -18,6 +21,12 @@ pub enum Error {
 
     #[error("Failed to parse cargo manifest at {path}: {error}")]
     CargoManifestParseError {
+        path: String,
+        error: toml::de::Error,
+    },
+
+    #[error("Failed to parse Cargo lock file at {path}: {error}")]
+    CargoLockParseError {
         path: String,
         error: toml::de::Error,
     },

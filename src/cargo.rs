@@ -4,6 +4,8 @@ use cargo_util_schemas::manifest::{InheritableField, TomlManifest, TomlWorkspace
 use glob::Pattern;
 use log::{debug, error, warn};
 use semver::Version;
+use serde::{Deserialize, Serialize, de::Error};
+use toml::Table;
 
 use crate::crates::Dependency;
 
@@ -211,6 +213,85 @@ impl Cargo {
         }
 
         Ok(Cargo::Workspace(packages))
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CargoLockPackages {
+    pub name: String,
+    pub version: Version,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CargoLockFile {
+    pub packages: Vec<CargoLockPackages>,
+}
+
+impl CargoLockFile {
+    pub fn read_from_path(path: &Path) -> Result<Self, crate::error::Error> {
+        debug!("Reading Cargo lock file at: {}", path.to_string_lossy());
+        let lock_content =
+            std::fs::read_to_string(path).map_err(|e| crate::error::Error::FileSystemError {
+                path: path.to_string_lossy().to_string(),
+                error: e.kind(),
+            })?;
+        let lock_content: Table = toml::from_str(&lock_content).map_err(|e| {
+            crate::error::Error::CargoLockParseError {
+                path: path.to_string_lossy().to_string(),
+                error: e,
+            }
+        })?;
+
+        let mut packages = vec![];
+
+        // Parse the packages from the lock content
+        for package in lock_content
+            .get("package")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&vec![])
+        {
+            let name = package
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::error::Error::CargoLockParseError {
+                    path: path.to_string_lossy().to_string(),
+                    error: toml::de::Error::custom(format!(
+                        "Missing 'name' field in package entry"
+                    )),
+                })?;
+
+            let version_str = package
+                .get("version")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| crate::error::Error::CargoLockParseError {
+                    path: path.to_string_lossy().to_string(),
+                    error: toml::de::Error::custom(format!(
+                        "Missing 'version' field in package entry"
+                    )),
+                })?;
+            let version = Version::parse(version_str).map_err(|e| {
+                crate::error::Error::CargoLockParseError {
+                    path: path.to_string_lossy().to_string(),
+                    error: toml::de::Error::custom(format!(
+                        "Invalid version '{}' in package '{}': {}",
+                        version_str, name, e
+                    )),
+                }
+            })?;
+
+            debug!(
+                "Parsed package from Cargo.lock: {} {}",
+                name,
+                version.to_string()
+            );
+            let cargo_lock_package = CargoLockPackages {
+                name: name.to_string(),
+                version,
+            };
+            packages.push(cargo_lock_package);
+        }
+
+        Ok(CargoLockFile { packages })
     }
 }
 

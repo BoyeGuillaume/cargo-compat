@@ -1,6 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use log::{debug, info, warn};
 use semver::VersionReq;
@@ -9,12 +12,14 @@ use crate::{
     cache::CrateCache,
     cargo::{Cargo, CargoPackage},
     crates::Crate,
+    validator::{BuildOptions, TestOptions},
 };
 pub mod cache;
 pub mod cargo;
 pub mod crates;
 pub mod error;
 pub mod resolver;
+pub mod validator;
 
 #[derive(Parser)]
 #[command(author, version, author, about, long_about = None)]
@@ -107,6 +112,22 @@ pub enum Command {
         /// Example: --include "crates/*" --include "tools/**"
         #[clap(long)]
         include: Vec<String>,
+
+        /// Optionally specify the path to the `cargo` executable to use. By default, the system `cargo` in PATH will be used.
+        #[clap(long, default_value = "cargo")]
+        cargo_path: String,
+
+        /// Build in release mode instead of debug mode
+        #[clap(long)]
+        release: bool,
+
+        /// Do not run tests, only build the packages to validate
+        #[clap(long)]
+        no_test: bool,
+
+        /// Use the following features when building/testing
+        #[clap(long, short)]
+        features: Vec<String>,
     },
 }
 
@@ -120,6 +141,11 @@ async fn main() {
             do_cache_command(cache_command, &args).await;
         }
         Command::ListDependencies { path, include } => {
+            let path = path
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap());
+
             let targets = read_cargo_from_path_with_includes(&path, &include);
 
             for package in targets {
@@ -161,14 +187,43 @@ async fn main() {
                 println!();
             }
         }
-        Command::Resolve { path, include } => {
-            do_resolve_command(&args, path, include).await;
+        Command::Resolve {
+            path,
+            include,
+            cargo_path,
+            release,
+            features,
+            no_test,
+        } => {
+            do_resolve_command(
+                &args,
+                path,
+                include,
+                cargo_path.clone(),
+                *release,
+                *no_test,
+                features.clone(),
+            )
+            .await;
         }
     }
 }
 
-async fn do_resolve_command(args: &Arguments, path: &Option<String>, include: &Vec<String>) {
-    let targets = read_cargo_from_path_with_includes(path, include);
+async fn do_resolve_command(
+    args: &Arguments,
+    path: &Option<String>,
+    include: &Vec<String>,
+    cargo_path: String,
+    release: bool,
+    no_test: bool,
+    features: Vec<String>,
+) {
+    let path = path
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+
+    let targets = read_cargo_from_path_with_includes(&path, include);
 
     // Read the cache
     let cache_paths = find_cache_path(&args.cache_dir);
@@ -189,10 +244,49 @@ async fn do_resolve_command(args: &Arguments, path: &Option<String>, include: &V
         }
     }
 
-    let package_informations = cached_resolver(args, cache_paths, all_dependencies).await;
+    // Resolve all packages
+    let package_informations = resolve_packages(args, cache_paths, all_dependencies).await;
+    let build_opts = BuildOptions {
+        packages: Some(targets.iter().map(|p| p.name.clone()).collect()),
+        features: if features.is_empty() {
+            None
+        } else {
+            Some(features)
+        },
+        release,
+    };
+
+    let mut resolver = resolver::Resolver::new(
+        targets,
+        path,
+        package_informations,
+        Box::new(validator::CargoRepoValidator::new(Some(cargo_path))),
+        build_opts,
+        if no_test {
+            None
+        } else {
+            Some(TestOptions { filters: vec![] })
+        },
+    );
+
+    match resolver.populate_default() {
+        Err(e) => {
+            log::error!("Failed to populate resolver: {}", e);
+            std::process::exit(1);
+        }
+        _ => {}
+    };
+
+    let versions = match resolver.resolve() {
+        Err(e) => {
+            log::error!("Failed to resolve packages: {}", e);
+            std::process::exit(1);
+        }
+        Ok(v) => v,
+    };
 }
 
-async fn cached_resolver(
+async fn resolve_packages(
     args: &Arguments,
     cache_paths: CachePaths,
     all_dependencies: Vec<String>,
@@ -328,7 +422,7 @@ async fn do_cache_command(command: &CacheCommand, args: &Arguments) {
                 println!(
                     "- {}: last fetched at {} (age: {} hours)",
                     crate_name,
-                    entry.last_fetched_at,
+                    local_datetime(entry.last_fetched_at),
                     age.num_hours()
                 );
             }
@@ -365,13 +459,23 @@ async fn do_cache_command(command: &CacheCommand, args: &Arguments) {
                 .remove(crate_name)
                 .unwrap();
 
+            cache
+                .save_to_path(&cache_paths.crate_cache)
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "Failed to save cache to {}: {}",
+                        cache_paths.crate_cache.display(),
+                        e
+                    );
+                });
+
             println!("Crate: {}", information.name);
             println!(
                 "Description: {}",
                 information.description.unwrap_or_default()
             );
-            println!("Created at: {}", information.created_at);
-            println!("Updated at: {}", information.updated_at);
+            println!("Created at: {}", local_datetime(information.created_at));
+            println!("Updated at: {}", local_datetime(information.updated_at));
             println!("A total of {} versions found", information.versions.len());
             println!("Versions:");
             for version in &information.versions {
@@ -379,7 +483,7 @@ async fn do_cache_command(command: &CacheCommand, args: &Arguments) {
                     println!(
                         "- {} (published at {}){}",
                         version.version,
-                        version.created_at,
+                        local_datetime(version.created_at),
                         if version.yanked { " (yanked)" } else { "" }
                     )
                 }
@@ -443,12 +547,7 @@ fn find_cache_path(cache_dir: &Option<String>) -> CachePaths {
     }
 }
 
-fn read_cargo_from_path(path: &Option<String>) -> Cargo {
-    let path = path
-        .as_ref()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
-
+fn read_cargo_from_path(path: &Path) -> Cargo {
     match Cargo::from_path(&path) {
         Ok(cargo) => cargo,
         Err(e) => {
@@ -458,10 +557,7 @@ fn read_cargo_from_path(path: &Option<String>) -> Cargo {
     }
 }
 
-fn read_cargo_from_path_with_includes(
-    path: &Option<String>,
-    includes: &[String],
-) -> Vec<CargoPackage> {
+fn read_cargo_from_path_with_includes(path: &Path, includes: &[String]) -> Vec<CargoPackage> {
     let cargo = read_cargo_from_path(path);
 
     // Match include patterns when using libraries
@@ -511,4 +607,11 @@ fn read_cargo_from_path_with_includes(
             targets
         }
     }
+}
+
+pub fn local_datetime(dt: DateTime<Utc>) -> String {
+    dt.with_timezone(&chrono::Local)
+        .format("%d/%m/%Y %H:%M:%S")
+        .to_string()
+    // dt.with_timezone(&chrono::Local)
 }
