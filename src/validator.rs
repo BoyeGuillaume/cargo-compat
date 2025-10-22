@@ -153,12 +153,6 @@ impl RepoValidator for CargoRepoValidator {
             })
             .map_err(|_| ())?;
         if !output.status.success() {
-            warn!(
-                "Failed to set dependency {} to version requirement {}: {}",
-                name,
-                version_req,
-                String::from_utf8_lossy(&output.stderr)
-            );
             return Err(());
         }
 
