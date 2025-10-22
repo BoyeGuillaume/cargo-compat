@@ -173,7 +173,15 @@ impl Resolver {
             }
         };
 
-        self.validator.set_dependencies(self.packages.clone());
+        for (name, version) in &self.packages {
+            info!("Initial package '{}' set to version '{}'", name, version);
+            self.validator
+                .set_dependency(name.clone(), version.clone())
+                .map_err(|_| {
+                    crate::error::Error::Other(format!("Failed to set dependency {}", name).into())
+                })?;
+        }
+
         self.validator.run_check(check).map_err(|e| match e {
             Either::Left(validation_error) => {
                 log::error!(
@@ -215,7 +223,12 @@ impl Resolver {
     pub fn write_cargo_toml_with_resolved_versions(&mut self) -> Result<(), Error> {
         for (package_name, version) in &self.packages_requirements {
             self.validator
-                .set_dependency_req(package_name.clone(), version.clone());
+                .set_dependency_req(package_name.clone(), version.clone())
+                .map_err(|_| {
+                    crate::error::Error::Other(
+                        format!("Failed to set dependency {}", package_name).into(),
+                    )
+                })?;
         }
 
         Ok(())
@@ -256,7 +269,18 @@ fn resolve_package(
         comparison_count.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         std::thread::sleep(std::time::Duration::from_millis(500)); // Throttle comparisons to avoid overwhelming the system
 
-        validator.set_dependency(package_name.to_string(), version.clone());
+        if validator
+            .set_dependency(package_name.to_string(), version.clone())
+            .is_err()
+        {
+            old_check.insert(version.clone(), false);
+            info!(
+                "Checking package '{}' with version '{}'...FAIL",
+                package_name, version
+            );
+            return Ok(false);
+        }
+
         match validator.run_check(check) {
             Err(Either::Left(_)) => {
                 old_check.insert(version.clone(), false);
@@ -295,7 +319,9 @@ fn resolve_package(
     );
 
     // Set dependency back to default
-    validator.set_dependency(package_name.to_string(), version);
+    validator
+        .set_dependency(package_name.to_string(), version)
+        .unwrap();
     Ok(output_req)
 }
 

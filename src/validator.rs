@@ -1,10 +1,9 @@
 //! Validation layer that runs cargo build/test to verify candidate dependency sets.
-use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use either::Either;
 use log::{debug, warn};
-use semver::{Version, VersionReq};
+use semver::{Comparator, Op, Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
 /// Options controlling how cargo build is run.
@@ -85,15 +84,9 @@ pub struct ValidationError {
 pub trait RepoValidator {
     fn clean(&mut self) {}
 
-    fn set_dependency_req(&mut self, name: String, version_req: VersionReq);
+    fn set_dependency_req(&mut self, name: String, version_req: VersionReq) -> Result<(), ()>;
 
-    fn set_dependency(&mut self, name: String, version: Version);
-
-    fn set_dependencies(&mut self, dependencies: BTreeMap<String, Version>) {
-        for (name, version) in dependencies {
-            self.set_dependency(name, version);
-        }
-    }
+    fn set_dependency(&mut self, name: String, version: Version) -> Result<(), ()>;
 
     fn run_check(
         &mut self,
@@ -149,14 +142,42 @@ impl RepoValidator for CargoRepoValidator {
             });
     }
 
-    fn set_dependency_req(&mut self, name: String, version_req: VersionReq) {
-        self.run_cargo_command(&["add".to_string(), format!("{}@{}", name, version_req)])
-            .unwrap();
+    fn set_dependency_req(&mut self, name: String, version_req: VersionReq) -> Result<(), ()> {
+        let output = self
+            .run_cargo_command(&["add".to_string(), format!("{}@{}", name, version_req)])
+            .inspect_err(|e| {
+                warn!(
+                    "Failed to set dependency {} to version requirement {}: {}",
+                    name, version_req, e
+                )
+            })
+            .map_err(|_| ())?;
+        if !output.status.success() {
+            warn!(
+                "Failed to set dependency {} to version requirement {}: {}",
+                name,
+                version_req,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Err(());
+        }
+
+        Ok(())
     }
 
-    fn set_dependency(&mut self, name: String, version: Version) {
-        self.run_cargo_command(&["add".to_string(), format!("{}@={}", name, version)])
-            .unwrap();
+    fn set_dependency(&mut self, name: String, version: Version) -> Result<(), ()> {
+        self.set_dependency_req(
+            name,
+            VersionReq {
+                comparators: vec![Comparator {
+                    op: Op::Exact,
+                    major: version.major,
+                    minor: Some(version.minor),
+                    patch: Some(version.patch),
+                    pre: version.pre,
+                }],
+            },
+        )
     }
 
     fn run_check(
