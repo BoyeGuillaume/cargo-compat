@@ -112,6 +112,9 @@ impl Resolver {
                     "Package '{}' not found in Cargo.lock. Selected latest version '{}' from crates.io",
                     pkg_name, latest_version.version
                 );
+
+                self.packages
+                    .insert(pkg_name.clone(), latest_version.version.clone());
             }
         }
 
